@@ -10,13 +10,14 @@ import type {
   RiskLevel,
 } from "@/types";
 
-const RPC_ENDPOINT =
-  process.env.SOLANA_RPC_URL ??
-  process.env.NEXT_PUBLIC_SOLANA_RPC_URL ??
-  "https://api.mainnet-beta.solana.com";
+const HELIUS_API_KEY = process.env.HELIUS_API_KEY ?? "";
+const HELIUS_RPC = HELIUS_API_KEY
+  ? `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`
+  : (process.env.SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com");
+const HELIUS_REST = `https://api.helius.xyz/v0`;
 
 function getConnection() {
-  return new Connection(RPC_ENDPOINT, { commitment: "confirmed" });
+  return new Connection(HELIUS_RPC, { commitment: "confirmed" });
 }
 
 // ─── External API types ──────────────────────────────────────────────────────
@@ -76,6 +77,102 @@ async function fetchDexScreener(address: string): Promise<DexPair | null> {
   }
 }
 
+// ─── Helius-specific fetchers ─────────────────────────────────────────────────
+
+interface HeliusTokenAccount {
+  address: string;
+  mint: string;
+  owner: string;
+  amount: number;
+  delegated_amount: number;
+  frozen: boolean;
+}
+
+interface HeliusTokenHolder {
+  address: string;
+  owner: string;
+  amount: number;
+}
+
+/** Uses Helius getTokenAccounts (enhanced RPC) to get top holders */
+async function fetchHeliusTopHolders(
+  mint: string
+): Promise<HeliusTokenHolder[]> {
+  if (!HELIUS_API_KEY) return [];
+  try {
+    const res = await fetch(HELIUS_RPC, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "solguard-holders",
+        method: "getTokenAccounts",
+        params: { mint, limit: 20, displayOptions: {} },
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    const accounts: HeliusTokenAccount[] = json?.result?.token_accounts ?? [];
+    return accounts
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 10)
+      .map((a) => ({ address: a.address, owner: a.owner, amount: a.amount }));
+  } catch {
+    return [];
+  }
+}
+
+interface HeliusTokenMetadata {
+  mint: string;
+  onChainMetadata?: {
+    metadata?: {
+      data?: { name?: string; symbol?: string; uri?: string };
+    };
+  };
+  legacyMetadata?: { name?: string; symbol?: string; logoURI?: string };
+}
+
+/** Uses Helius REST API to get rich token metadata */
+async function fetchHeliusMetadata(
+  mint: string
+): Promise<HeliusTokenMetadata | null> {
+  if (!HELIUS_API_KEY) return null;
+  try {
+    const res = await fetch(
+      `${HELIUS_REST}/token-metadata?api-key=${HELIUS_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mintAccounts: [mint] }),
+        signal: AbortSignal.timeout(8000),
+      }
+    );
+    if (!res.ok) return null;
+    const json = await res.json();
+    return Array.isArray(json) ? json[0] ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Uses Helius enhanced transactions API */
+async function fetchHeliusTransactions(
+  address: string
+): Promise<Array<{ timestamp: number; type: string; fee: number }>> {
+  if (!HELIUS_API_KEY) return [];
+  try {
+    const res = await fetch(
+      `${HELIUS_REST}/addresses/${address}/transactions?api-key=${HELIUS_API_KEY}&limit=100`,
+      { signal: AbortSignal.timeout(10000) }
+    );
+    if (!res.ok) return [];
+    return await res.json();
+  } catch {
+    return [];
+  }
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function shortAddr(addr: string) {
@@ -116,6 +213,38 @@ function groupSigsByDay(
     date,
     transactions,
     volume: transactions * 120,
+  }));
+}
+
+function groupHeliusTxsByDay(
+  txns: Array<{ timestamp: number; fee?: number }>
+): TransactionPoint[] {
+  const nowSec = Date.now() / 1000;
+  const map: Record<string, { count: number; fees: number }> = {};
+
+  for (let i = 9; i >= 0; i--) {
+    const key = new Date((nowSec - i * 86400) * 1000).toLocaleDateString(
+      "en-US",
+      { month: "short", day: "numeric" }
+    );
+    map[key] = { count: 0, fees: 0 };
+  }
+
+  for (const tx of txns) {
+    const key = new Date(tx.timestamp * 1000).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    });
+    if (key in map) {
+      map[key].count++;
+      map[key].fees += tx.fee ?? 0;
+    }
+  }
+
+  return Object.entries(map).map(([date, { count, fees }]) => ({
+    date,
+    transactions: count,
+    volume: Math.round(fees / 1e6), // lamports → SOL approx
   }));
 }
 
@@ -440,16 +569,18 @@ export async function analyzeToken(addressString: string): Promise<AnalysisRepor
     );
   }
 
-  // ── Step 2: Fetch mint + external data in parallel ────────────────────────
-  const [mintResult, largestResult, sigsResult, jupResult, dexResult] =
+  // ── Step 2: Fetch all data in parallel (Helius-enhanced) ─────────────────
+  const [mintResult, sigsResult, jupResult, dexResult, heliusHolders, heliusMeta, heliusTxns] =
     await Promise.allSettled([
       isToken2022
         ? getMint(connection, mintPubkey, undefined, TOKEN_2022_PROGRAM_ID)
         : getMint(connection, mintPubkey),
-      connection.getTokenLargestAccounts(mintPubkey),
-      connection.getSignaturesForAddress(mintPubkey, { limit: 300 }),
+      connection.getSignaturesForAddress(mintPubkey, { limit: 100 }),
       fetchJupiterToken(addressString),
       fetchDexScreener(addressString),
+      fetchHeliusTopHolders(addressString),
+      fetchHeliusMetadata(addressString),
+      fetchHeliusTransactions(addressString),
     ]);
 
   if (mintResult.status === "rejected") {
@@ -459,47 +590,44 @@ export async function analyzeToken(addressString: string): Promise<AnalysisRepor
   }
 
   const mint = mintResult.value;
-  const largest =
-    largestResult.status === "fulfilled" ? largestResult.value : null;
-  const sigs =
-    sigsResult.status === "fulfilled" ? sigsResult.value : [];
-  const jupToken =
-    jupResult.status === "fulfilled" ? jupResult.value : null;
+  const sigs = sigsResult.status === "fulfilled" ? sigsResult.value : [];
+  const jupToken = jupResult.status === "fulfilled" ? jupResult.value : null;
   const dex = dexResult.status === "fulfilled" ? dexResult.value : null;
+  const topHolders = heliusHolders.status === "fulfilled" ? heliusHolders.value : [];
+  const heliusMetaData = heliusMeta.status === "fulfilled" ? heliusMeta.value : null;
+  const heliusTxData = heliusTxns.status === "fulfilled" ? heliusTxns.value : [];
 
-  // ── Token metadata ──
-  const name =
-    jupToken?.name ?? dex?.baseToken?.name ?? "Unknown Token";
-  const symbol =
-    jupToken?.symbol ?? dex?.baseToken?.symbol ?? "???";
+  // ── Token metadata (Helius > Jupiter > DexScreener fallback) ──
+  const heliusName =
+    heliusMetaData?.onChainMetadata?.metadata?.data?.name?.replace(/\0/g, "").trim() ||
+    heliusMetaData?.legacyMetadata?.name;
+  const heliusSymbol =
+    heliusMetaData?.onChainMetadata?.metadata?.data?.symbol?.replace(/\0/g, "").trim() ||
+    heliusMetaData?.legacyMetadata?.symbol;
+
+  const name = heliusName ?? jupToken?.name ?? dex?.baseToken?.name ?? "Unknown Token";
+  const symbol = heliusSymbol ?? jupToken?.symbol ?? dex?.baseToken?.symbol ?? "???";
   const decimals = mint.decimals;
   const totalSupply = Number(mint.supply) / Math.pow(10, decimals);
   const mintAuthority = mint.mintAuthority?.toBase58() ?? null;
   const freezeAuthority = mint.freezeAuthority?.toBase58() ?? null;
 
-  // ── Holder distribution ──
-  const topAccounts = largest?.value ?? [];
+  // ── Holder distribution (Helius getTokenAccounts > RPC fallback) ──────────
   let holderData: HolderData[] = [];
   let topHolderPct = 0;
   let top3HolderPct = 0;
 
-  if (topAccounts.length > 0 && totalSupply > 0) {
-    const sliced = topAccounts.slice(0, 5);
-    const topSum = sliced.reduce((s, a) => s + (a.uiAmount ?? 0), 0);
+  if (topHolders.length > 0 && totalSupply > 0) {
+    const sliced = topHolders.slice(0, 5);
+    const topSum = sliced.reduce((s, h) => s + h.amount / Math.pow(10, decimals), 0);
     const otherAmt = Math.max(0, totalSupply - topSum);
 
-    holderData = sliced.map((acc, i) => {
-      const pct = ((acc.uiAmount ?? 0) / totalSupply) * 100;
+    holderData = sliced.map((h, i) => {
+      const uiAmount = h.amount / Math.pow(10, decimals);
+      const pct = (uiAmount / totalSupply) * 100;
       return {
-        name:
-          i === 0
-            ? "Top Holder"
-            : i === 1
-            ? "Holder #2"
-            : i === 2
-            ? "Holder #3"
-            : `Wallet #${i + 1}`,
-        value: acc.uiAmount ?? 0,
+        name: i === 0 ? "Top Holder" : i === 1 ? "Holder #2" : i === 2 ? "Holder #3" : `Wallet #${i + 1}`,
+        value: uiAmount,
         percentage: Math.round(pct * 10) / 10,
       };
     });
@@ -513,38 +641,32 @@ export async function analyzeToken(addressString: string): Promise<AnalysisRepor
     }
 
     topHolderPct = holderData[0]?.percentage ?? 0;
-    top3HolderPct = holderData
-      .slice(0, 3)
-      .reduce((s, h) => s + h.percentage, 0);
+    top3HolderPct = holderData.slice(0, 3).reduce((s, h) => s + h.percentage, 0);
   }
 
-  // ── Wallet activity ──
-  const walletActivity: WalletActivity[] = topAccounts
-    .slice(0, 4)
-    .map((acc, i) => {
-      const pct =
-        totalSupply > 0
-          ? ((acc.uiAmount ?? 0) / totalSupply) * 100
-          : 0;
-      const suspicious = pct > 20;
-      return {
-        address: shortAddr(acc.address.toBase58()),
-        label:
-          i === 0 && pct > 30
-            ? "Dev Wallet?"
-            : i === 0
-            ? "Top Holder"
-            : `Wallet #${i + 1}`,
-        percentage: Math.round(pct * 10) / 10,
-        transactions: 0, // would require extra per-account RPC calls
-        firstSeen: "On-chain",
-        lastSeen: "On-chain",
-        isSuspicious: suspicious,
-      };
-    });
+  // ── Wallet activity (Helius owner addresses) ──────────────────────────────
+  const walletActivity: WalletActivity[] = topHolders.slice(0, 4).map((h, i) => {
+    const uiAmount = h.amount / Math.pow(10, decimals);
+    const pct = totalSupply > 0 ? (uiAmount / totalSupply) * 100 : 0;
+    const suspicious = pct > 20;
+    return {
+      address: shortAddr(h.owner),
+      label: i === 0 && pct > 30 ? "Dev Wallet?" : i === 0 ? "Top Holder" : `Wallet #${i + 1}`,
+      percentage: Math.round(pct * 10) / 10,
+      transactions: 0,
+      firstSeen: "On-chain",
+      lastSeen: "On-chain",
+      isSuspicious: suspicious,
+    };
+  });
 
-  // ── Transaction history chart ──
-  const transactionActivity = groupSigsByDay(sigs);
+  // ── Transaction history (Helius enhanced txns > RPC sigs fallback) ────────
+  let transactionActivity: TransactionPoint[];
+  if (heliusTxData.length > 0) {
+    transactionActivity = groupHeliusTxsByDay(heliusTxData);
+  } else {
+    transactionActivity = groupSigsByDay(sigs);
+  }
 
   // ── DEX data ──
   const liquidityUSD = dex?.liquidity?.usd ?? 0;
