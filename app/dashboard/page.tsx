@@ -1,5 +1,7 @@
 "use client";
 
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Navbar } from "@/components/layout/Navbar";
 import { SearchBar } from "@/components/dashboard/SearchBar";
@@ -7,19 +9,27 @@ import { LoadingState } from "@/components/dashboard/LoadingState";
 import { AnalysisReport } from "@/components/dashboard/AnalysisReport";
 import { EmptyState } from "@/components/dashboard/EmptyState";
 import { useAnalysis } from "@/hooks/useAnalysis";
-import { useState } from "react";
 import { Menu, X, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 
-export default function DashboardPage() {
+function DashboardContent() {
   const { report, step, stepLabel, progress, error, analyze, reset } = useAnalysis();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const searchParams = useSearchParams();
   const isLoading = step !== "idle" && step !== "complete";
+
+  // Auto-scan if address is in URL query (from landing page token cards)
+  useEffect(() => {
+    const addr = searchParams.get("address");
+    if (addr && step === "idle") {
+      analyze(addr);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="flex h-screen bg-black overflow-hidden">
-      {/* Mobile sidebar overlay */}
       {sidebarOpen && (
         <div
           className="fixed inset-0 bg-black/70 z-40 lg:hidden"
@@ -27,7 +37,6 @@ export default function DashboardPage() {
         />
       )}
 
-      {/* Sidebar */}
       <div
         className={cn(
           "fixed lg:static inset-y-0 left-0 z-50 lg:z-auto transition-transform duration-300",
@@ -37,7 +46,6 @@ export default function DashboardPage() {
         <Sidebar />
       </div>
 
-      {/* Main */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <div className="relative">
           <button
@@ -62,7 +70,7 @@ export default function DashboardPage() {
               <SearchBar onAnalyze={analyze} isLoading={isLoading} />
             </div>
 
-            {/* Error state */}
+            {/* Error */}
             {error && (
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
@@ -73,17 +81,22 @@ export default function DashboardPage() {
                 <div>
                   <p className="text-sm font-medium text-red-400">Analysis Failed</p>
                   <p className="text-xs text-red-400/70 mt-0.5">{error}</p>
+                  {error.includes("Invalid") && (
+                    <p className="text-xs text-zinc-500 mt-1.5">
+                      Solana addresses are Base58-encoded (32–44 chars). Ethereum addresses starting with <code className="text-zinc-400">0x</code> are not supported.
+                    </p>
+                  )}
                 </div>
                 <button
                   onClick={reset}
-                  className="ml-auto text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                  className="ml-auto text-xs text-zinc-500 hover:text-zinc-300 transition-colors flex-shrink-0"
                 >
                   Dismiss
                 </button>
               </motion.div>
             )}
 
-            {/* Output */}
+            {/* States */}
             {step === "idle" && !error && <EmptyState />}
             {isLoading && (
               <div className="rounded-2xl bg-zinc-950 border border-zinc-800/60">
@@ -97,5 +110,13 @@ export default function DashboardPage() {
         </main>
       </div>
     </div>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense>
+      <DashboardContent />
+    </Suspense>
   );
 }

@@ -387,11 +387,19 @@ function buildAISummary(s: RiskSignals, score: number): string {
 // ─── Main export ─────────────────────────────────────────────────────────────
 
 export async function analyzeToken(addressString: string): Promise<AnalysisReport> {
+  if (addressString.startsWith("0x")) {
+    throw new Error(
+      "This looks like an Ethereum address. SolGuard AI only supports Solana (Base58) addresses."
+    );
+  }
+
   let mintPubkey: PublicKey;
   try {
     mintPubkey = new PublicKey(addressString);
   } catch {
-    throw new Error("Invalid Solana address format.");
+    throw new Error(
+      "Invalid Solana address. Please enter a valid Base58-encoded token mint or wallet address."
+    );
   }
 
   const connection = getConnection();
