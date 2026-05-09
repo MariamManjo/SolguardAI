@@ -1,5 +1,5 @@
 import { Connection, PublicKey } from "@solana/web3.js";
-import { getMint } from "@solana/spl-token";
+import { getMint, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import type {
   AnalysisReport,
   HolderData,
@@ -404,10 +404,48 @@ export async function analyzeToken(addressString: string): Promise<AnalysisRepor
 
   const connection = getConnection();
 
-  // Fetch everything in parallel
+  // ── Step 1: Inspect account type before calling getMint ──────────────────
+  const accountInfo = await connection.getAccountInfo(mintPubkey);
+
+  if (!accountInfo) {
+    throw new Error(
+      "Account not found on Solana mainnet. Double-check the address — it may be on devnet or doesn't exist yet."
+    );
+  }
+
+  const TOKEN_PROGRAM_ID_STR = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+  const TOKEN_2022_ID_STR    = TOKEN_2022_PROGRAM_ID.toBase58();
+  const SYSTEM_PROGRAM_STR   = "11111111111111111111111111111111";
+
+  const ownerProgram = accountInfo.owner.toBase58();
+
+  if (accountInfo.executable) {
+    throw new Error(
+      "This address is a Solana program/smart contract, not a token mint. Paste the token's mint address instead (find it on Solscan under the token page, not the program page)."
+    );
+  }
+
+  if (ownerProgram === SYSTEM_PROGRAM_STR) {
+    throw new Error(
+      "This is a wallet address, not a token mint. To scan a token, paste its mint address (the token contract address shown on Solscan or DexScreener)."
+    );
+  }
+
+  const isToken2022 = ownerProgram === TOKEN_2022_ID_STR;
+  const isTokenProgram = ownerProgram === TOKEN_PROGRAM_ID_STR;
+
+  if (!isToken2022 && !isTokenProgram) {
+    throw new Error(
+      `This account is owned by an unknown program (${ownerProgram.slice(0, 12)}…). Only SPL Token and Token-2022 mint addresses are supported.`
+    );
+  }
+
+  // ── Step 2: Fetch mint + external data in parallel ────────────────────────
   const [mintResult, largestResult, sigsResult, jupResult, dexResult] =
     await Promise.allSettled([
-      getMint(connection, mintPubkey),
+      isToken2022
+        ? getMint(connection, mintPubkey, undefined, TOKEN_2022_PROGRAM_ID)
+        : getMint(connection, mintPubkey),
       connection.getTokenLargestAccounts(mintPubkey),
       connection.getSignaturesForAddress(mintPubkey, { limit: 300 }),
       fetchJupiterToken(addressString),
@@ -416,7 +454,7 @@ export async function analyzeToken(addressString: string): Promise<AnalysisRepor
 
   if (mintResult.status === "rejected") {
     throw new Error(
-      "Token not found on Solana mainnet. Check the address and try again."
+      `Failed to parse token mint data: ${mintResult.reason?.message ?? "unknown error"}`
     );
   }
 
