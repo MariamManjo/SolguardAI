@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { Shield, Sparkles } from "lucide-react";
+import { Shield } from "lucide-react";
 import { WalletButton } from "@/components/wallet/WalletButton";
 
 export function LandingNav() {
@@ -37,16 +37,6 @@ export function LandingNav() {
 
         <div className="flex items-center gap-3">
           <WalletButton variant="compact" />
-          <Link href="/dashboard">
-            <motion.button
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-500 text-black text-sm font-semibold hover:bg-emerald-400 transition-colors"
-              whileHover={{ scale: 1.03 }}
-              whileTap={{ scale: 0.97 }}
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              Launch App
-            </motion.button>
-          </Link>
         </div>
       </div>
     </motion.nav>
