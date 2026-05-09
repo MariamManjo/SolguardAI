@@ -8,55 +8,46 @@ interface RiskBreakdownChartProps {
   data: RiskBreakdown[];
 }
 
-function getBarColor(score: number) {
-  if (score <= 25) return "bg-emerald-500";
-  if (score <= 50) return "bg-yellow-500";
-  if (score <= 75) return "bg-orange-500";
-  return "bg-red-500";
-}
-
-function getLabelColor(label: string) {
-  switch (label) {
-    case "Critical": return "text-red-400";
-    case "High": return "text-orange-400";
-    case "Medium": return "text-yellow-400";
-    case "Low": return "text-emerald-400";
-    case "Safe": return "text-emerald-400";
-    default: return "text-zinc-400";
-  }
+function getBarStyle(score: number): { bar: string; text: string } {
+  if (score <= 15) return { bar: "bg-emerald-500",  text: "text-emerald-400" };
+  if (score <= 40) return { bar: "bg-amber-500",    text: "text-amber-400"   };
+  if (score <= 70) return { bar: "bg-orange-500",   text: "text-orange-400"  };
+  return              { bar: "bg-red-500",      text: "text-red-400"     };
 }
 
 export function RiskBreakdownChart({ data }: RiskBreakdownChartProps) {
   return (
     <motion.div
-      initial={{ opacity: 0, y: 16 }}
+      initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.3 }}
-      className="rounded-2xl bg-zinc-950 border border-zinc-800 p-5"
+      transition={{ delay: 0.15 }}
+      className="px-6 py-5 space-y-5"
     >
-      <h3 className="text-sm font-semibold text-zinc-100 mb-4">Risk Breakdown</h3>
-      <div className="space-y-3.5">
-        {data.map((item, i) => (
-          <div key={item.category}>
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-xs text-zinc-400">{item.category}</span>
-              <div className="flex items-center gap-2">
-                <span className={cn("text-xs font-medium", getLabelColor(item.label))}>
+      <p className="text-xs uppercase tracking-[0.18em] text-zinc-500 font-medium">Risk Breakdown</p>
+
+      <div className="space-y-4">
+        {data.map((item, i) => {
+          const { bar, text } = getBarStyle(item.score);
+          const pct = (item.score / item.max) * 100;
+          return (
+            <div key={item.category}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-zinc-300">{item.category}</span>
+                <span className={cn("text-xs font-medium tabular-nums", text)}>
                   {item.label}
                 </span>
-                <span className="text-xs text-zinc-500 font-mono">{item.score}</span>
+              </div>
+              <div className="h-[3px] bg-zinc-800/80 rounded-full overflow-hidden">
+                <motion.div
+                  className={cn("h-full rounded-full", bar)}
+                  initial={{ width: 0 }}
+                  animate={{ width: `${pct}%` }}
+                  transition={{ duration: 0.9, delay: 0.05 * i, ease: "easeOut" }}
+                />
               </div>
             </div>
-            <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-              <motion.div
-                className={cn("h-full rounded-full", getBarColor(item.score))}
-                initial={{ width: 0 }}
-                animate={{ width: `${(item.score / item.max) * 100}%` }}
-                transition={{ duration: 0.8, delay: 0.1 * i, ease: "easeOut" }}
-              />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </motion.div>
   );
