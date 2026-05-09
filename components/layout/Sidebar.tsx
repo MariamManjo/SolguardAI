@@ -38,9 +38,9 @@ export function Sidebar({ className }: SidebarProps) {
       )}
     >
       {/* Logo */}
-      <div className="flex items-center gap-3 px-5 py-5 border-b border-zinc-800/50">
+      <Link href="/" className="flex items-center gap-3 px-5 py-5 border-b border-zinc-800/50 hover:bg-zinc-900/40 transition-colors group">
         <div className="relative">
-          <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
+          <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center group-hover:bg-emerald-500/30 transition-colors">
             <Shield className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
@@ -49,7 +49,7 @@ export function Sidebar({ className }: SidebarProps) {
           <span className="font-bold text-sm text-zinc-100">SolGuard</span>
           <span className="font-bold text-sm text-emerald-400"> AI</span>
         </div>
-      </div>
+      </Link>
 
       {/* AI Engine Badge */}
       <div className="mx-4 mt-4 mb-2">
