@@ -24,9 +24,6 @@ export function LandingNav() {
         </Link>
 
         <div className="hidden md:flex items-center gap-8">
-          <a href="#features" className="text-sm text-zinc-400 hover:text-zinc-100 transition-colors">
-            Features
-          </a>
           <a href="#how-it-works" className="text-sm text-zinc-400 hover:text-zinc-100 transition-colors">
             How it works
           </a>
